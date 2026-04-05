@@ -26,7 +26,7 @@ Pandas – xử lý dữ liệu
 SQLite – cơ sở dữ liệu
 
 Statsmodels – dự báo (ARIMA)
-
+...
 Streamlit – dashboard
 
 SHA-256 Hash Chain – blockchain local để xác thực toàn vẹn dữ liệu
