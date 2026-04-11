@@ -39,6 +39,12 @@ Merkle Root – đại diện toàn vẹn cho toàn bộ giao dịch
 
 Anchor Snapshot – neo hash snapshot để theo dõi lịch sử
 
+Chế độ mặc định hiện tại: `Fabric-first`.
+
+- ETL sẽ xuất dữ liệu sang `fabric/outbox/financial-assets.json`.
+- Node client trong `fabric/client/invoke-client.js` dùng payload này để submit vào chaincode.
+- Blockchain nội bộ chỉ còn vai trò legacy (bật lại bằng `APP_MODE=legacy` hoặc `APP_MODE=hybrid`).
+
 Beekeeper Studio – xem database (tùy chọn)
 
 📁 Cấu trúc thư mục
@@ -60,8 +66,21 @@ E:\VLU\Số Hóa\Số Hóa\
 │  └─ revenue_forecast.py  # Dự báo doanh thu
 │
 ├─ blockchain\
-│  ├─ ledger.py            # Tạo và xác minh blockchain hash-chain
-│  └─ verify_chain.py      # Kiểm tra toàn vẹn dữ liệu từ blockchain
+│  ├─ ledger.py            # Legacy local blockchain (tùy chọn)
+│  └─ verify_chain.py      # Legacy verify script (tùy chọn)
+│
+├─ fabric\
+│  ├─ chaincode\
+│  │  └─ financial-asset-chaincode.js  # Chaincode Fabric
+│  ├─ client\
+│  │  └─ invoke-client.js              # Node client gọi chaincode
+│  └─ network\
+│     ├─ docker-compose.yaml           # Peer/orderer/CA/CouchDB/CLI
+│     ├─ configtx.yaml                 # Profile channel artifacts
+│     ├─ crypto-config.yaml            # Cấu hình crypto material
+│     └─ scripts/                      # Script up/down và generate artifacts
+│  └─ outbox\
+│     └─ financial-assets.json         # Payload ETL xuất cho Fabric
 │
 ├─ dashboard\
 │  └─ app.py               # Dashboard Streamlit
@@ -105,7 +124,7 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 4) Cài thư viện:
 
 ```powershell
-python -m pip install -r requirements.py
+python -m pip install -r requirements.txt
 ```
 
 Ghi chú: sqlite3 đã có sẵn trong Python.
@@ -142,7 +161,7 @@ type data\transactions.csv
 
 File không được rỗng.
 
-2) Chạy ETL (CSV -> SQLite + blockchain ledger):
+2) Chạy ETL (CSV -> SQLite + Fabric outbox/sync):
 
 ```powershell
 python main_etl.py
@@ -152,11 +171,28 @@ Kết quả mong đợi:
 
 ```text
 Data loaded successfully
-Blockchain ledger rebuilt: ... blocks
+Legacy blockchain rebuild skipped (Fabric-first mode).
+Fabric outbox exported: ... assets, status: ...
 ETL completed successfully
 ```
 
-Mỗi block sẽ có thêm `Security ID` để tăng khả năng xác thực.
+Luồng Fabric sẽ xuất dữ liệu giao dịch sang `fabric/outbox/financial-assets.json` để client Node đẩy lên chaincode.
+
+### Khởi động Fabric network (dev)
+
+PowerShell:
+
+```powershell
+cd "E:\VLU\Số Hóa\Số Hóa\fabric\network"
+.\scripts\generate-artifacts.ps1
+.\scripts\network-up.ps1
+```
+
+Sau khi test xong:
+
+```powershell
+.\scripts\network-down.ps1
+```
 
 3) Chạy dự báo doanh thu:
 

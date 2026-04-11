@@ -1,0 +1,14 @@
+{
+  "name": "financial-asset-chaincode",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Hyperledger Fabric chaincode for the financial digitization project",
+  "main": "index.js",
+  "scripts": {
+    "start": "fabric-chaincode-node start"
+  },
+  "dependencies": {
+    "fabric-contract-api": "^2.2.20",
+    "fabric-shim": "^2.2.20"
+  }
+}
