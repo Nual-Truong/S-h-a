@@ -30,3 +30,16 @@ data/*.sqlite3
 
 # Streamlit
 .streamlit/
+
+# Fabric generated artifacts / runtime outputs
+fabric/network/channel-artifacts/
+fabric/network/crypto-config/
+fabric/network/system-genesis-block/
+fabric/network/docker-compose-ca.yaml
+fabric/network/docker-compose-couch.yaml
+fabric/outbox/*.json
+
+# Logs and temp
+*.log
+tmp/
+temp/
