@@ -54,8 +54,10 @@ FABRIC_HASH_MODE = os.getenv("FABRIC_HASH_MODE", "total").strip().lower()
 if FABRIC_HASH_MODE not in {"total", "per-transaction", "both"}:
     FABRIC_HASH_MODE = "total"
 
-# Dashboard access control: leave empty to allow everyone; set to require admin password.
-DASHBOARD_ADMIN_PASSWORD = os.getenv("DASHBOARD_ADMIN_PASSWORD", "").strip()
+# Dashboard access control.
+# Default credentials: admin / admin.
+DASHBOARD_ADMIN_USERNAME = os.getenv("DASHBOARD_ADMIN_USERNAME", "admin").strip() or "admin"
+DASHBOARD_ADMIN_PASSWORD = os.getenv("DASHBOARD_ADMIN_PASSWORD", "admin").strip() or "admin"
 
 # Optional viewer label for dashboard context.
 DASHBOARD_VIEWER_LABEL = os.getenv("DASHBOARD_VIEWER_LABEL", "viewer").strip() or "viewer"

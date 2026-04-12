@@ -10,6 +10,7 @@ import streamlit as st
 
 from config import (
     APP_MODE,
+    DASHBOARD_ADMIN_USERNAME,
     DASHBOARD_ADMIN_PASSWORD,
     DASHBOARD_VIEWER_LABEL,
     ENABLE_LEGACY_BLOCKCHAIN,
@@ -86,17 +87,14 @@ def resolve_dashboard_role() -> str:
     if "dashboard_role" not in st.session_state:
         st.session_state["dashboard_role"] = "viewer"
 
-    if not DASHBOARD_ADMIN_PASSWORD:
-        st.session_state["dashboard_role"] = "admin"
-        return "admin"
-
     with st.sidebar.form("dashboard_access_form"):
         st.caption(f"Vai trò hiện tại: {st.session_state['dashboard_role']}")
+        username = st.text_input("Tài khoản")
         password = st.text_input("Mật khẩu quản trị", type="password")
         submitted = st.form_submit_button("Đăng nhập")
 
     if submitted:
-        if password == DASHBOARD_ADMIN_PASSWORD:
+        if username == DASHBOARD_ADMIN_USERNAME and password == DASHBOARD_ADMIN_PASSWORD:
             st.session_state["dashboard_role"] = "admin"
             st.sidebar.success("Đăng nhập quản trị thành công.")
             st.rerun()
