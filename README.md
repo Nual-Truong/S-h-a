@@ -11,6 +11,7 @@ Du an ETL + Dashboard tai chinh voi huong Fabric-first:
 - Node.js LTS (khuyen nghi 18+)
 - Docker Desktop (neu chay Fabric network)
 - Windows PowerShell
+- FastAPI/Uvicorn duoc cai bang `requirements.txt`
 
 ## 2) Clone va setup nhanh
 
@@ -42,10 +43,15 @@ Cac bien quan trong:
 - `FABRIC_COMMIT_TIMEOUT=900`
 - `FABRIC_START_OFFSET=0`
 - `FABRIC_MAX_ASSETS=300`
+- `DASHBOARD_ADMIN_PASSWORD` (tuy chon)
 
-Luu y: project hien tai doc bien moi truong tu he thong shell. Neu dung file `.env`, hay set bien trong terminal hoac bo sung dotenv loader theo nhu cau.
+Luu y: project hien tai tu dong doc file `.env` o thu muc goc neu file nay ton tai. Bien trong terminal van co uu tien cao hon file `.env`.
+
+Neu dat `DASHBOARD_ADMIN_PASSWORD`, cac nut thay doi du lieu, sync Fabric, va tamper se chi mo khi nhap dung mat khau quan tri. Neu de trong, dashboard mac dinh o che do admin.
 
 ## 4) Chay nhanh (khong can Fabric)
+
+### Mode local (Python)
 
 ```powershell
 . ./.venv/Scripts/Activate.ps1
@@ -60,6 +66,42 @@ Neu cong bi ban:
 ```powershell
 python -m streamlit run dashboard/app.py --server.port 8503
 ```
+
+### Mode local (Docker)
+
+```powershell
+./scripts/docker-dashboard.ps1
+```
+
+Mo trinh duyet tai http://localhost:8501
+
+Neu muon chay ETL trong Docker:
+
+```powershell
+./scripts/docker-etl.ps1
+```
+
+Ghi chu:
+- Cach nay chi phuc vu phan local Python/Streamlit.
+- Fabric network van chay rieng trong `fabric/network`.
+
+### API rieng
+
+```powershell
+./scripts/run-api.ps1
+```
+
+Mo tai: http://localhost:8000/docs
+
+API co cac endpoint chinh:
+- `GET /health`
+- `GET /status`
+- `GET /logs`
+- `GET /report.xlsx`
+- `POST /admin/fabric/sync`
+- `POST /admin/checkpoint/clear`
+
+Neu dat `DASHBOARD_ADMIN_PASSWORD`, cac endpoint `POST /admin/*` se can header `X-Admin-Password`.
 
 ## 5) Chay day du voi Fabric
 
@@ -88,6 +130,11 @@ python main_etl.py
 ./scripts/fabric-down.ps1
 ```
 
+### Tach ro 2 che do
+
+- Local: `python main_etl.py` hoac `docker compose up --build dashboard`
+- Fabric day du: `./scripts/fabric-up.ps1` + `python main_etl.py`
+
 ## 6) Auto-resume theo lo dung de lam gi?
 
 Trong tab Fabric cua dashboard:
@@ -95,6 +142,7 @@ Trong tab Fabric cua dashboard:
 - Chia submit thanh nhieu batch nho.
 - Cho phep bat dau lai tu `offset` mong muon.
 - Giam kha nang timeout khi submit mot lan qua nhieu giao dich.
+- Checkpoint auto-resume duoc luu tai `fabric/outbox/sync-checkpoint.json`.
 
 Goi y:
 - Data it (vai dong): sync thuong.

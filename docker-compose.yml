@@ -1,0 +1,38 @@
+services:
+  dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: financial-dashboard
+    ports:
+      - "8501:8501"
+    environment:
+      APP_MODE: ${APP_MODE:-fabric-first}
+      FABRIC_AUTO_SYNC: ${FABRIC_AUTO_SYNC:-1}
+      FABRIC_HASH_MODE: ${FABRIC_HASH_MODE:-both}
+      FABRIC_COMMIT_TIMEOUT: ${FABRIC_COMMIT_TIMEOUT:-900}
+      FABRIC_START_OFFSET: ${FABRIC_START_OFFSET:-0}
+      FABRIC_MAX_ASSETS: ${FABRIC_MAX_ASSETS:-300}
+      BLOCKCHAIN_SECRET_KEY: ${BLOCKCHAIN_SECRET_KEY:-replace-with-your-secret}
+    volumes:
+      - ./:/app
+    command: ["python", "-m", "streamlit", "run", "dashboard/app.py", "--server.address=0.0.0.0", "--server.port=8501"]
+    restart: unless-stopped
+
+  etl:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: financial-etl
+    environment:
+      APP_MODE: ${APP_MODE:-fabric-first}
+      FABRIC_AUTO_SYNC: ${FABRIC_AUTO_SYNC:-1}
+      FABRIC_HASH_MODE: ${FABRIC_HASH_MODE:-both}
+      FABRIC_COMMIT_TIMEOUT: ${FABRIC_COMMIT_TIMEOUT:-900}
+      FABRIC_START_OFFSET: ${FABRIC_START_OFFSET:-0}
+      FABRIC_MAX_ASSETS: ${FABRIC_MAX_ASSETS:-300}
+      BLOCKCHAIN_SECRET_KEY: ${BLOCKCHAIN_SECRET_KEY:-replace-with-your-secret}
+    volumes:
+      - ./:/app
+    command: ["python", "main_etl.py"]
+    profiles: ["etl"]

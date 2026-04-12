@@ -8,17 +8,33 @@ import altair as alt
 import pandas as pd
 import streamlit as st
 
-from config import APP_MODE, ENABLE_LEGACY_BLOCKCHAIN, FABRIC_HASH_MODE
+from config import (
+    APP_MODE,
+    DASHBOARD_ADMIN_PASSWORD,
+    DASHBOARD_VIEWER_LABEL,
+    ENABLE_LEGACY_BLOCKCHAIN,
+    FABRIC_HASH_MODE,
+)
 from db.database import get_connection
 from etl.extract import extract_csv, extract_excel, save_csv_from_dataframe
 from etl.load import load_to_db
 from etl.transform import transform_data
-from fabric.sync import get_fabric_status, run_fabric_client, summarize_fabric_outbox
+from fabric.sync import (
+    append_runtime_log,
+    clear_fabric_checkpoint,
+    get_fabric_checkpoint,
+    get_fabric_status,
+    get_recent_runtime_logs,
+    run_fabric_client,
+    save_fabric_checkpoint,
+    summarize_fabric_outbox,
+)
 from forecast.revenue_forecast import evaluate_forecast, forecast_by_category, forecast_next_month
 from ai.anomaly_detection import detect_anomalies
 from ai.insight_generator import generate_insight
 from ai.seasonality import analyze_seasonality
 from ai.trend_analysis import analyze_trend
+from services.reporting import build_excel_report_bytes, build_pdf_report_bytes
 
 st.set_page_config(
     page_title="Quản Lý Tài Chính Thông Minh",
@@ -64,6 +80,39 @@ def open_local_path(path_value: str):
         return
 
     raise OSError("Hệ điều hành hiện tại chưa được hỗ trợ mở đường dẫn tự động.")
+
+
+def resolve_dashboard_role() -> str:
+    if "dashboard_role" not in st.session_state:
+        st.session_state["dashboard_role"] = "viewer"
+
+    if not DASHBOARD_ADMIN_PASSWORD:
+        st.session_state["dashboard_role"] = "admin"
+        return "admin"
+
+    with st.sidebar.form("dashboard_access_form"):
+        st.caption(f"Vai trò hiện tại: {st.session_state['dashboard_role']}")
+        password = st.text_input("Mật khẩu quản trị", type="password")
+        submitted = st.form_submit_button("Đăng nhập")
+
+    if submitted:
+        if password == DASHBOARD_ADMIN_PASSWORD:
+            st.session_state["dashboard_role"] = "admin"
+            st.sidebar.success("Đăng nhập quản trị thành công.")
+            st.rerun()
+        else:
+            st.sidebar.error("Sai mật khẩu quản trị.")
+
+    if st.session_state["dashboard_role"] == "admin":
+        st.sidebar.success("Đang ở chế độ quản trị.")
+    else:
+        st.sidebar.info(f"Chế độ xem: {DASHBOARD_VIEWER_LABEL}")
+
+    return st.session_state["dashboard_role"]
+
+
+dashboard_role = resolve_dashboard_role()
+is_admin = dashboard_role == "admin"
 
 
 def _strip_ansi(value: str) -> str:
@@ -212,11 +261,46 @@ def run_fabric_auto_resume(total_assets: int, start_offset: int, batch_size: int
             denominator = max(total_assets - start_offset, 1)
             progress_bar.progress(min(max(completed / denominator, 0), 1))
 
+            save_fabric_checkpoint(
+                {
+                    "status": "running",
+                    "next_offset": offset + int(submitted_count),
+                    "completed": completed,
+                    "target": max(total_assets - start_offset, 0),
+                    "batch_size": batch_size,
+                    "commit_timeout": commit_timeout,
+                    "last_message": sync_result.get("message"),
+                }
+            )
+
             if sync_result.get("status") in {"error", "dry_run"}:
                 stopped_reason = sync_result.get("message", "Không rõ lỗi")
+                save_fabric_checkpoint(
+                    {
+                        "status": "stopped",
+                        "next_offset": offset,
+                        "completed": completed,
+                        "target": max(total_assets - start_offset, 0),
+                        "batch_size": batch_size,
+                        "commit_timeout": commit_timeout,
+                        "last_message": stopped_reason,
+                    }
+                )
                 break
 
         final_status = "completed" if stopped_reason is None else "stopped"
+        if final_status == "completed":
+            save_fabric_checkpoint(
+                {
+                    "status": "completed",
+                    "next_offset": total_assets,
+                    "completed": max(total_assets - start_offset, 0),
+                    "target": max(total_assets - start_offset, 0),
+                    "batch_size": batch_size,
+                    "commit_timeout": commit_timeout,
+                    "last_message": "Hoàn tất auto-resume theo lô.",
+                }
+            )
         return {
             "status": final_status,
             "completed": completed,
@@ -273,6 +357,7 @@ with get_connection() as integrity_conn:
 
 fabric_status = get_fabric_status()
 fabric_integrity = summarize_fabric_outbox()
+fabric_checkpoint = get_fabric_checkpoint()
 
 st.sidebar.header("Bộ lọc hiển thị")
 
@@ -413,6 +498,34 @@ with tab_overview:
     season_df = analyze_seasonality()
     st.bar_chart(season_df.set_index("month"))
 
+    report_sections = {
+        "overview": df_view,
+        "trend": trend_display,
+        "anomalies": anomalies_display if "anomalies_display" in locals() else pd.DataFrame(),
+        "forecast": forecast_display,
+        "seasonality": season_df,
+    }
+    report_bytes = build_excel_report_bytes(report_sections)
+    report_pdf_bytes = build_pdf_report_bytes(
+        "Financial Dashboard Report",
+        report_sections,
+        subtitle="Báo cáo tổng hợp từ dữ liệu đang hiển thị trên dashboard.",
+    )
+    report_col1, report_col2, report_col3 = st.columns(3)
+    report_col1.download_button(
+        "Tải báo cáo Excel",
+        data=report_bytes,
+        file_name="financial_dashboard_report.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+    report_col2.download_button(
+        "Tải báo cáo PDF",
+        data=report_pdf_bytes,
+        file_name="financial_dashboard_report.pdf",
+        mime="application/pdf",
+    )
+    report_col3.caption("Báo cáo gồm dữ liệu tổng quan, xu hướng, cảnh báo, dự báo và mùa vụ.")
+
 with tab_fabric:
     st.subheader("Fabric-First Status")
     st.caption(f"App mode: {APP_MODE}")
@@ -461,7 +574,7 @@ with tab_fabric:
         format_func=lambda key: f"{key} - {hash_mode_options[key]}",
     )
 
-    if st.button("Áp dụng hash mode và chạy ETL"):
+    if st.button("Áp dụng hash mode và chạy ETL", disabled=not is_admin):
         try:
             os.environ["FABRIC_HASH_MODE"] = selected_hash_mode
             baseline_df = extract_csv("data/transactions.csv")
@@ -471,16 +584,30 @@ with tab_fabric:
             st.rerun()
         except Exception as exc:
             st.error(f"Không thể áp dụng hash mode: {exc}")
+    if not is_admin:
+        st.caption("Cần đăng nhập quản trị để đổi hash mode và chạy ETL.")
 
     st.markdown("**Chạy auto-resume theo lô**")
     batch_col1, batch_col2, batch_col3 = st.columns(3)
     batch_size = batch_col1.number_input("Kích thước batch", min_value=10, max_value=2000, value=300, step=10)
     commit_timeout = batch_col2.number_input("Commit timeout (giây)", min_value=60, max_value=3600, value=900, step=30)
+    checkpoint_next_offset = int(fabric_checkpoint.get("next_offset") or 0)
+    default_start_offset = checkpoint_next_offset if checkpoint_next_offset > 0 else min(estimated_synced, total_assets)
     start_offset_input = batch_col3.number_input(
-        "Offset bắt đầu", min_value=0, max_value=max(total_assets, 0), value=min(estimated_synced, total_assets), step=1
+        "Offset bắt đầu", min_value=0, max_value=max(total_assets, 0), value=min(default_start_offset, total_assets), step=1
     )
 
-    if st.button("Auto-resume sync toàn bộ"):
+    st.caption(
+        f"Checkpoint hiện tại: status={fabric_checkpoint.get('status')}, next_offset={fabric_checkpoint.get('next_offset')}, completed={fabric_checkpoint.get('completed')}"
+    )
+
+    checkpoint_clear_col, _ = st.columns([1, 3])
+    if checkpoint_clear_col.button("Xóa checkpoint auto-resume", disabled=not is_admin):
+        clear_fabric_checkpoint()
+        st.success("Đã xóa checkpoint auto-resume.")
+        st.rerun()
+
+    if st.button("Auto-resume sync toàn bộ", disabled=not is_admin):
         if total_assets <= 0:
             st.warning("Chưa có dữ liệu outbox để đồng bộ.")
         else:
@@ -500,6 +627,8 @@ with tab_fabric:
                 )
                 st.code(summary.get("reason") or "Không rõ lỗi")
             st.rerun()
+    if not is_admin:
+        st.caption("Cần đăng nhập quản trị để chạy auto-resume hoặc xóa checkpoint.")
 
     if fabric_integrity.get("payload_hash"):
         hash_value = fabric_integrity["payload_hash"]
@@ -521,6 +650,15 @@ with tab_fabric:
         st.warning("Outbox Fabric chưa sẵn sàng.")
         for issue in fabric_integrity["issues"]:
             st.write(f"- {issue}")
+
+    st.subheader("Nhật ký chạy gần nhất")
+    recent_logs = get_recent_runtime_logs(limit=15)
+    if recent_logs:
+        logs_df = pd.DataFrame(recent_logs)
+        logs_df["message"] = logs_df["message"].astype(str).str.slice(0, 140)
+        st.dataframe(logs_df[["timestamp", "component", "status", "message"]], width="stretch")
+    else:
+        st.info("Chưa có nhật ký chạy nào.")
 
 if ENABLE_LEGACY_BLOCKCHAIN and integrity_result is not None:
     st.divider()
@@ -554,7 +692,7 @@ if ENABLE_LEGACY_BLOCKCHAIN and integrity_result is not None:
         st.dataframe(audit_display, width="stretch")
         st.dataframe(anchor_df, width="stretch")
 
-    if st.button("Giả lập sửa ngẫu nhiên 1 giao dịch"):
+    if st.button("Giả lập sửa ngẫu nhiên 1 giao dịch", disabled=not is_admin):
         with get_connection() as tamper_conn:
             tamper_info = tamper_random_transaction(tamper_conn)
 
@@ -566,8 +704,10 @@ if ENABLE_LEGACY_BLOCKCHAIN and integrity_result is not None:
             )
             st.info("Đang tải lại để cập nhật trạng thái blockchain...")
             st.rerun()
+    if not is_admin:
+        st.caption("Cần đăng nhập quản trị để giả lập tamper dữ liệu.")
 
-if st.button("Khôi phục dữ liệu từ CSV gốc"):
+if st.button("Khôi phục dữ liệu từ CSV gốc", disabled=not is_admin):
     try:
         baseline_df = extract_csv("data/transactions.csv")
         baseline_clean_df = transform_data(baseline_df)
@@ -576,6 +716,8 @@ if st.button("Khôi phục dữ liệu từ CSV gốc"):
         st.rerun()
     except Exception as exc:
         st.error(f"Khôi phục thất bại: {exc}")
+if not is_admin:
+    st.caption("Cần đăng nhập quản trị để khôi phục dữ liệu từ CSV gốc.")
 
 with tab_excel:
     st.subheader("Phân tích dữ liệu từ file Excel")

@@ -5,3 +5,7 @@ streamlit
 scikit-learn
 openpyxl
 ecdsa
+fastapi
+uvicorn
+httpx
+reportlab

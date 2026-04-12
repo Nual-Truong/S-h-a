@@ -1,6 +1,6 @@
 from config import ENABLE_LEGACY_BLOCKCHAIN, FABRIC_AUTO_SYNC
 from db.database import get_connection
-from fabric.sync import export_fabric_payload, record_fabric_status, run_fabric_client
+from fabric.sync import append_runtime_log, export_fabric_payload, record_fabric_status, run_fabric_client
 
 if ENABLE_LEGACY_BLOCKCHAIN:
     from blockchain.ledger import rebuild_ledger
@@ -39,4 +39,14 @@ def load_to_db(df):
 
     print(
         f"Fabric outbox exported: {len(fabric_payload['assets'])} assets, status: {fabric_status.get('status')}, message: {fabric_status.get('message')}"
+    )
+    append_runtime_log(
+        "etl",
+        fabric_status.get("status", "completed"),
+        "ETL completed successfully",
+        {
+            "rows": int(len(df)),
+            "fabric_status": fabric_status.get("status"),
+            "fabric_count": len(fabric_payload.get("assets", [])),
+        },
     )
