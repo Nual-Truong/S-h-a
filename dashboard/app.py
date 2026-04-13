@@ -36,6 +36,13 @@ from ai.insight_generator import generate_insight
 from ai.seasonality import analyze_seasonality
 from ai.trend_analysis import analyze_trend
 from services.reporting import build_excel_report_bytes, build_pdf_report_bytes
+from services.store import (
+    authenticate_user,
+    checkout_order,
+    get_receipt_by_order_id,
+    list_orders_for_user,
+    list_products,
+)
 
 st.set_page_config(
     page_title="Quản Lý Tài Chính Thông Minh",
@@ -83,34 +90,61 @@ def open_local_path(path_value: str):
     raise OSError("Hệ điều hành hiện tại chưa được hỗ trợ mở đường dẫn tự động.")
 
 
-def resolve_dashboard_role() -> str:
-    if "dashboard_role" not in st.session_state:
-        st.session_state["dashboard_role"] = "viewer"
+def _default_dashboard_identity() -> dict:
+    return {
+        "id": None,
+        "username": None,
+        "display_name": DASHBOARD_VIEWER_LABEL,
+        "role": "viewer",
+        "authenticated": False,
+    }
+
+
+def resolve_dashboard_identity() -> dict:
+    if "dashboard_identity" not in st.session_state:
+        st.session_state["dashboard_identity"] = _default_dashboard_identity()
 
     with st.sidebar.form("dashboard_access_form"):
-        st.caption(f"Vai trò hiện tại: {st.session_state['dashboard_role']}")
+        st.caption(f"Vai trò hiện tại: {st.session_state['dashboard_identity']['role']}")
         username = st.text_input("Tài khoản")
-        password = st.text_input("Mật khẩu quản trị", type="password")
+        password = st.text_input("Mật khẩu", type="password")
         submitted = st.form_submit_button("Đăng nhập")
 
     if submitted:
-        if username == DASHBOARD_ADMIN_USERNAME and password == DASHBOARD_ADMIN_PASSWORD:
-            st.session_state["dashboard_role"] = "admin"
-            st.sidebar.success("Đăng nhập quản trị thành công.")
+        account = authenticate_user(username, password)
+        if account:
+            st.session_state["dashboard_identity"] = {
+                "id": account["id"],
+                "username": account["username"],
+                "display_name": account["display_name"],
+                "role": account["role"],
+                "authenticated": True,
+            }
+            st.sidebar.success(f"Đăng nhập thành công: {account['display_name']} ({account['role']})")
             st.rerun()
         else:
-            st.sidebar.error("Sai mật khẩu quản trị.")
+            st.sidebar.error("Sai tài khoản hoặc mật khẩu.")
 
-    if st.session_state["dashboard_role"] == "admin":
+    if st.sidebar.button("Đăng xuất", disabled=not st.session_state["dashboard_identity"]["authenticated"]):
+        st.session_state["dashboard_identity"] = _default_dashboard_identity()
+        st.rerun()
+
+    if st.session_state["dashboard_identity"]["role"] == "admin":
         st.sidebar.success("Đang ở chế độ quản trị.")
+    elif st.session_state["dashboard_identity"]["authenticated"]:
+        st.sidebar.info(
+            f"Đã đăng nhập: {st.session_state['dashboard_identity']['display_name']} ({st.session_state['dashboard_identity']['role']})"
+        )
     else:
         st.sidebar.info(f"Chế độ xem: {DASHBOARD_VIEWER_LABEL}")
 
-    return st.session_state["dashboard_role"]
+    return st.session_state["dashboard_identity"]
 
 
-dashboard_role = resolve_dashboard_role()
+dashboard_identity = resolve_dashboard_identity()
+dashboard_role = dashboard_identity["role"]
 is_admin = dashboard_role == "admin"
+is_buyer = dashboard_role in {"user", "admin"}
 
 
 def _strip_ansi(value: str) -> str:
@@ -334,7 +368,7 @@ inject_custom_css()
 st.title("Quản Lý Tài Chính Thông Minh")
 st.caption("Dashboard tài chính + Fabric-first sync với khả năng theo dõi trạng thái và hash toàn vẹn.")
 
-tab_overview, tab_fabric, tab_excel = st.tabs(["📈 Tổng quan", "🔗 Fabric", "📄 Excel"])
+tab_overview, tab_fabric, tab_store, tab_excel = st.tabs(["📈 Tổng quan", "🔗 Fabric", "🛒 Cửa hàng", "📄 Excel"])
 
 conn = get_connection()
 df = pd.read_sql("SELECT * FROM transactions", conn)
@@ -439,7 +473,11 @@ with tab_overview:
     else:
         trend_df = analyze_trend()
 
-    trend_display = trend_df.rename(columns={"date": "Tháng", "category": "Danh mục", "amount": "Doanh thu"})
+    trend_display = pd.DataFrame(trend_df).copy()
+    trend_display.columns = [
+        "Tháng" if column == "date" else "Danh mục" if column == "category" else "Doanh thu" if column == "amount" else column
+        for column in trend_display.columns
+    ]
     trend_display = format_columns_with_commas(trend_display, ["Doanh thu"])
     st.dataframe(trend_display, width="stretch")
 
@@ -657,6 +695,178 @@ with tab_fabric:
         st.dataframe(logs_df[["timestamp", "component", "status", "message"]], width="stretch")
     else:
         st.info("Chưa có nhật ký chạy nào.")
+
+with tab_store:
+    st.subheader("Cửa hàng sản phẩm")
+    st.caption("Tài khoản `user` và `admin` có thể mua hàng. `viewer` chỉ xem danh mục và lịch sử nếu có.")
+
+    product_rows = list_products()
+    product_df = pd.DataFrame(product_rows)
+    if product_df.empty:
+        st.warning("Chưa có sản phẩm trong catalog.")
+    else:
+        product_display = product_df.copy()
+        product_display["Giá"] = product_display["price"].apply(fmt_number)
+        product_display["Tồn kho"] = product_display["stock"].apply(fmt_number)
+        st.dataframe(
+            product_display[["product_id", "product_name", "brand", "category", "Giá", "Tồn kho", "description"]],
+            width="stretch",
+        )
+
+    if "shopping_cart" not in st.session_state:
+        st.session_state["shopping_cart"] = []
+
+    product_lookup = {row["product_id"]: row for row in product_rows}
+
+    if is_buyer and product_rows:
+        available_products = [row for row in product_rows if int(row.get("stock") or 0) > 0]
+        if available_products:
+            with st.form("add_to_cart_form"):
+                selected_product_id = st.selectbox(
+                    "Chọn sản phẩm",
+                    options=[row["product_id"] for row in available_products],
+                    format_func=lambda product_id: (
+                        f"{product_id} - {product_lookup[product_id]['product_name']} ({fmt_number(product_lookup[product_id]['price'])} VND)"
+                    ),
+                )
+                max_quantity = int(product_lookup[selected_product_id]["stock"])
+                quantity = st.number_input("Số lượng", min_value=1, max_value=max_quantity, value=1, step=1)
+                add_to_cart = st.form_submit_button("Thêm vào giỏ")
+
+            if add_to_cart:
+                cart = st.session_state["shopping_cart"]
+                existing_item = next((item for item in cart if item["product_id"] == selected_product_id), None)
+                if existing_item:
+                    existing_item["quantity"] += int(quantity)
+                else:
+                    cart.append({"product_id": selected_product_id, "quantity": int(quantity)})
+                st.success("Đã thêm sản phẩm vào giỏ hàng.")
+
+            if st.session_state["shopping_cart"]:
+                cart_preview_rows = []
+                cart_total = 0
+                for item in st.session_state["shopping_cart"]:
+                    product = product_lookup[item["product_id"]]
+                    line_total = int(product["price"]) * int(item["quantity"])
+                    cart_total += line_total
+                    cart_preview_rows.append(
+                        {
+                            "product_id": product["product_id"],
+                            "product_name": product["product_name"],
+                            "brand": product["brand"],
+                            "quantity": item["quantity"],
+                            "unit_price": product["price"],
+                            "line_total": line_total,
+                        }
+                    )
+
+                cart_df = pd.DataFrame(cart_preview_rows)
+                cart_df["unit_price"] = cart_df["unit_price"].apply(fmt_number)
+                cart_df["line_total"] = cart_df["line_total"].apply(fmt_number)
+                st.dataframe(cart_df, width="stretch")
+                st.metric("Tổng giỏ hàng", fmt_number(cart_total))
+
+                cart_action_col1, cart_action_col2 = st.columns(2)
+                if cart_action_col1.button("Xóa giỏ hàng"):
+                    st.session_state["shopping_cart"] = []
+                    st.session_state.pop("last_receipt", None)
+                    st.rerun()
+
+                if cart_action_col2.button("Xác nhận mua"):
+                    try:
+                        receipt = checkout_order(dashboard_identity, st.session_state["shopping_cart"], payment_method="COD")
+                        st.session_state["last_receipt"] = receipt
+                        st.session_state["shopping_cart"] = []
+                        st.success("Đã xác nhận mua hàng và tạo biên lai.")
+                        st.rerun()
+                    except Exception as exc:
+                        st.error(f"Không thể hoàn tất thanh toán: {exc}")
+
+            if st.session_state.get("last_receipt"):
+                receipt = st.session_state["last_receipt"]
+                st.subheader("📋 Biên lai giao dịch")
+                
+                with st.container(border=True):
+                    receipt_col1, receipt_col2, receipt_col3 = st.columns(3)
+                    receipt_col1.metric("🧾 Mã biên lai", receipt["receipt_number"])
+                    receipt_col2.metric("🆔 Mã giao dịch", receipt["transaction_id"])
+                    receipt_col3.metric("⏰ Ngày mua", receipt.get("created_at", "N/A")[:10])
+                    
+                    st.divider()
+                    
+                    info_col1, info_col2 = st.columns(2)
+                    with info_col1:
+                        st.write(f"👤 **Người mua:** {receipt['buyer']['display_name']}")
+                        st.write(f"   Tài khoản: `{receipt['buyer']['username']}`")
+                        st.write(f"   Vai trò: `{receipt['buyer']['role']}`")
+                    
+                    with info_col2:
+                        st.write(f"💰 **Tổng tiền:** `{fmt_number(receipt['total_amount'])} VND`")
+                        st.write(f"📲 **Phương thức:** {receipt.get('payment_method', 'COD')}")
+                        st.write(f"✅ **Trạng thái:** `{receipt['status']}`")
+                    
+                    st.divider()
+                    st.write("**📦 Chi tiết sản phẩm:**")
+                    
+                    receipt_items_df = pd.DataFrame(receipt["items"])
+                    if not receipt_items_df.empty:
+                        receipt_items_df["unit_price"] = receipt_items_df["unit_price"].apply(fmt_number)
+                        receipt_items_df["line_total"] = receipt_items_df["line_total"].apply(fmt_number)
+                        st.dataframe(
+                            receipt_items_df[["product_id", "product_name", "brand", "quantity", "unit_price", "line_total"]],
+                            use_container_width=True,
+                            hide_index=True
+                        )
+        else:
+            st.info("Không còn sản phẩm nào đủ tồn kho để mua.")
+    else:
+        st.info("Bạn cần đăng nhập bằng tài khoản `user` hoặc `admin` để mua hàng.")
+
+    if dashboard_identity.get("authenticated"):
+        st.subheader("📄 Lịch sử mua hàng")
+        order_history = list_orders_for_user(dashboard_identity["username"])
+        if order_history:
+            for idx, order in enumerate(order_history):
+                receipt_detail = get_receipt_by_order_id(order["order_id"])
+                if not receipt_detail:
+                    continue
+                
+                order_label = f"📦 {receipt_detail['receipt_number']} - {fmt_number(receipt_detail['total_amount'])} VND ({receipt_detail['status']})"
+                
+                with st.expander(order_label, expanded=(idx == 0)):
+                    with st.container(border=True):
+                        detail_col1, detail_col2, detail_col3 = st.columns(3)
+                        detail_col1.metric("🧾 Mã biên lai", receipt_detail["receipt_number"])
+                        detail_col2.metric("🆔 Mã giao dịch", receipt_detail["transaction_id"])
+                        detail_col3.metric("⏰ Ngày mua", receipt_detail.get("created_at", "N/A")[:10])
+                        
+                        st.divider()
+                        
+                        det_col1, det_col2 = st.columns(2)
+                        with det_col1:
+                            st.write(f"👤 **Người mua:** {receipt_detail['buyer']['display_name']}")
+                            st.write(f"   Tài khoản: `{receipt_detail['buyer']['username']}`")
+                            st.write(f"   Vai trò: `{receipt_detail['buyer']['role']}`")
+                        
+                        with det_col2:
+                            st.write(f"💰 **Tổng tiền:** `{fmt_number(receipt_detail['total_amount'])} VND`")
+                            st.write(f"📲 **Phương thức:** {receipt_detail.get('payment_method', 'COD')}")
+                            st.write(f"✅ **Trạng thái:** `{receipt_detail['status']}`")
+                        
+                        st.divider()
+                        st.write("**📦 Chi tiết sản phẩm:**")
+                        
+                        det_items_df = pd.DataFrame(receipt_detail["items"])
+                        if not det_items_df.empty:
+                            det_items_df["unit_price"] = det_items_df["unit_price"].apply(fmt_number)
+                            det_items_df["line_total"] = det_items_df["line_total"].apply(fmt_number)
+                            st.dataframe(
+                                det_items_df[["product_id", "product_name", "brand", "quantity", "unit_price", "line_total"]],
+                                use_container_width=True,
+                                hide_index=True
+                            )
+        else:
+            st.info("Chưa có đơn hàng nào cho tài khoản này.")
 
 if ENABLE_LEGACY_BLOCKCHAIN and integrity_result is not None:
     st.divider()

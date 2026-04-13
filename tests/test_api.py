@@ -82,6 +82,47 @@ class ApiTest(unittest.TestCase):
                 self.assertEqual(response.headers["content-type"], "application/pdf")
                 self.assertTrue(response.content.startswith(b"%PDF"))
 
+    def test_user_login_checkout_and_receipt(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            db_path = tmp_path / "sfm.db"
+
+            with patch("db.database.DB_PATH", str(db_path)):
+                with TestClient(app) as client:
+                    login_response = client.post(
+                        "/auth/login",
+                        json={"username": "user", "password": "user"},
+                    )
+                    self.assertEqual(login_response.status_code, 200)
+                    login_body = login_response.json()
+                    token = login_body["access_token"]
+
+                    products_response = client.get("/products")
+                    self.assertEqual(products_response.status_code, 200)
+                    products = products_response.json()["items"]
+                    self.assertTrue(len(products) > 0)
+
+                    checkout_response = client.post(
+                        "/checkout",
+                        headers={"Authorization": f"Bearer {token}"},
+                        json={"items": [{"product_id": "ML01", "quantity": 1}], "payment_method": "COD"},
+                    )
+                    self.assertEqual(checkout_response.status_code, 200)
+                    receipt_body = checkout_response.json()
+                    self.assertEqual(receipt_body["buyer"]["username"], "user")
+                    self.assertTrue(receipt_body["order_id"])
+                    self.assertTrue(receipt_body["transaction_id"])
+                    self.assertTrue(receipt_body["receipt_number"])
+                    self.assertTrue(receipt_body["total_amount"] > 0)
+                    self.assertTrue(len(receipt_body["items"]) > 0)
+
+                    receipt_response = client.get(
+                        f"/orders/{receipt_body['order_id']}/receipt",
+                        headers={"Authorization": f"Bearer {token}"},
+                    )
+                    self.assertEqual(receipt_response.status_code, 200)
+                    self.assertEqual(receipt_response.json()["order_id"], receipt_body["order_id"])
+
 
 if __name__ == "__main__":
     unittest.main()
